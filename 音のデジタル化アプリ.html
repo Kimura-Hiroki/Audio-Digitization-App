@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>音のデジタル化（A/D変換）体験アプリ</title>
+  <style>
+    /* ===== グローバルスタイル ===== */
+    body {
+      background: #fffaf5;
+      font-family: "Yu Gothic", "Hiragino Kaku Gothic Pro", Meiryo, sans-serif;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.8em;
+      margin-bottom: 10px;
+      color: #5c4033;
+    }
+    #container {
+      flex: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      border: 1px solid #e0d4c3;
+      background: #fdf6f0;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    /* ===== コントロール周り ===== */
+    #controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 15px;
+      background: #fff1e6;
+      padding: 10px 15px;
+      border: 1px solid #f0d9c9;
+      border-radius: 6px;
+    }
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    #controls label {
+      font-weight: bold;
+      margin-right: 8px;
+      font-size: 0.95em;
+    }
+    #controls input[type="range"],
+    #controls select {
+      vertical-align: middle;
+      margin-left: 4px;
+    }
+    .control-group {
+      display: flex;
+      align-items: center;
+      margin: 5px 0;
+    }
+    .control-group span {
+      display: inline-block;
+      width: 40px;
+      text-align: right;
+      font-weight: bold;
+      margin-left: 8px;
+    }
+    /* ===== キャンバスまわり ===== */
+    #canvasArea {
+      position: relative;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      background: #fdfdfd;
+    }
+    /* セクションタイトル */
+    .section-title {
+      font-weight: bold;
+      font-size: 1.1em;
+      margin: 10px 0 4px 0;
+      color: #333;
+    }
+    /* ===== フッター ===== */
+    footer {
+      text-align: center;
+      padding: 10px 0;
+      font-size: 0.9em;
+      color: #666;
+      background: #fdf6f0;
+      border-top: 1px solid #e0d4c3;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>音のデジタル化（A/D変換）体験アプリ</h1>
+
+    <!-- コントロール領域 -->
+    <div id="controls">
+      <!-- 波形選択 -->
+      <div class="control-row">
+        <div class="control-group">
+          <label for="waveformSelect">波形選択：</label>
+          <select id="waveformSelect">
+            <option value="sine">単一正弦波 (2 Hz)</option>
+            <option value="sine2">重畳正弦波 (2 Hz + 4 Hz)</option>
+            <option value="square">矩形波 (2 Hz)</option>
+            <option value="sawtooth">鋸歯状波 (2 Hz)</option>
+            <option value="triangle">三角波 (2 Hz)</option>
+          </select>
+        </div>
+      </div>
+      <!-- サンプリング周波数 & 量子化ビット数 -->
+      <div class="control-row">
+        <div class="control-group">
+          <label for="samplingFreq">サンプリング周波数 (Hz)：</label>
+          <input type="range" id="samplingFreq" min="4" max="50" value="10" step="1" />
+          <span id="sfLabel">10</span>
+        </div>
+        <div class="control-group">
+          <label for="bitDepth">量子化ビット数 (ビット)：</label>
+          <input type="range" id="bitDepth" min="2" max="6" value="3" step="1" />
+          <span id="bdLabel">3</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 描画領域 -->
+    <div id="canvasArea">
+      <!-- セクションタイトル -->
+      <div class="section-title">（a）アナログ信号</div>
+      <canvas id="canvasAnalog" width="840" height="150"></canvas>
+
+      <div class="section-title">（b）標本化（Sampling）</div>
+      <canvas id="canvasSampling" width="840" height="200"></canvas>
+
+      <div class="section-title">（c）量子化（Quantization）</div>
+      <canvas id="canvasQuant" width="840" height="200"></canvas>
+
+      <div class="section-title">（d）符号化（Encoding）</div>
+      <canvas id="canvasEncode" width="840" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- フッター -->
+  <footer>©2025 キムりん＠松本深志高校</footer>
+
+  <script>
+    /*******************************************************
+     * 音のデジタル化（A/D変換）体験アプリ
+     * ①アナログ信号 → ②標本化 → ③量子化 → ④符号化
+     *******************************************************/
+
+    const totalTime = 1.0;
+    const canvasWidth = 840;
+    const analogHeight = 150;
+    const samplingHeight = 200;
+    const quantHeight = 200;
+    const encodeHeight = 200;
+    const margin = { top: 10, right: 30, bottom: 30, left: 40 };
+
+    const waveformSelect = document.getElementById('waveformSelect');
+    const samplingFreq = document.getElementById('samplingFreq');
+    const bitDepth = document.getElementById('bitDepth');
+    const sfLabel = document.getElementById('sfLabel');
+    const bdLabel = document.getElementById('bdLabel');
+    const canvasAnalog = document.getElementById('canvasAnalog');
+    const ctxAnalog = canvasAnalog.getContext('2d');
+    const canvasSampling = document.getElementById('canvasSampling');
+    const ctxSampling = canvasSampling.getContext('2d');
+    const canvasQuant = document.getElementById('canvasQuant');
+    const ctxQuant = canvasQuant.getContext('2d');
+    const canvasEncode = document.getElementById('canvasEncode');
+    const ctxEncode = canvasEncode.getContext('2d');
+
+    sfLabel.textContent = samplingFreq.value;
+    bdLabel.textContent = bitDepth.value;
+
+    samplingFreq.addEventListener('input', () => {
+      sfLabel.textContent = samplingFreq.value;
+      drawAll();
+    });
+    bitDepth.addEventListener('input', () => {
+      bdLabel.textContent = bitDepth.value;
+      drawAll();
+    });
+    waveformSelect.addEventListener('change', () => {
+      drawAll();
+    });
+    window.addEventListener('load', drawAll);
+
+    function analogWave(t) {
+      const mode = waveformSelect.value;
+      const freq = 2;
+      switch(mode) {
+        case 'sine':
+          return 0.5 + 0.4 * Math.sin(2 * Math.PI * freq * t);
+        case 'sine2':
+          return 0.5 + 0.3 * Math.sin(2 * Math.PI * freq * t) + 0.2 * Math.sin(2 * Math.PI * (freq * 2) * t);
+        case 'square':
+          const s = Math.sin(2 * Math.PI * freq * t);
+          return 0.5 + 0.4 * (s >= 0 ? 1 : -1);
+        case 'sawtooth':
+          const x1 = (t * freq) % 1;
+          return 0.5 + 0.4 * (2 * x1 - 1);
+        case 'triangle':
+          const x2 = (t * freq) % 1;
+          return 0.5 + 0.4 * (1 - 4 * Math.abs(x2 - 0.5));
+        default:
+          return 0.5 + 0.4 * Math.sin(2 * Math.PI * freq * t);
+      }
+    }
+
+    function drawAll() {
+      const sf = parseInt(samplingFreq.value, 10);
+      const bd = parseInt(bitDepth.value, 10);
+      const sampleTimes = [];
+      for (let i = 0; i <= sf; i++) {
+        sampleTimes.push(i / sf * totalTime);
+      }
+      const resolution = 1000;
+      const analogData = [];
+      for (let i = 0; i <= resolution; i++) {
+        const t = (i / resolution) * totalTime;
+        analogData.push({ t: t, y: analogWave(t) });
+      }
+      const samples = sampleTimes.map(t => ({ t: t, y: analogWave(t) }));
+      const levels = Math.pow(2, bd);
+      const quantized = samples.map(pt => {
+        const intVal = Math.round(pt.y * (levels - 1));
+        const qy = intVal / (levels - 1);
+        const bin = intVal.toString(2).padStart(bd, '0');
+        return { t: pt.t, y: pt.y, qy: qy, intVal: intVal, bin: bin };
+      });
+
+      drawAnalog(ctxAnalog, analogData);
+      drawSampling(ctxSampling, analogData, samples, sf);
+      drawQuantization(ctxQuant, analogData, samples, quantized, levels);
+      drawEncoding(ctxEncode, quantized, levels, bd);
+    }
+
+    function drawAnalog(ctx, analogData) {
+      ctx.clearRect(0, 0, canvasWidth, analogHeight);
+      drawGrid(ctx, canvasWidth, analogHeight, 10, 4);
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(margin.left, analogHeight - margin.bottom); ctx.lineTo(canvasWidth - margin.right, analogHeight - margin.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, analogHeight - margin.bottom); ctx.stroke();
+      ctx.fillStyle = "#333"; ctx.font = "12px sans-serif";
+      ctx.fillText("電圧", margin.left - 30, margin.top + 5);
+      ctx.fillText("時間", canvasWidth - margin.right - 20, analogHeight - margin.bottom + 20);
+      ctx.strokeStyle = "#0066cc";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      analogData.forEach((pt, i) => {
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const y = margin.top + (analogHeight - margin.top - margin.bottom) * (1 - pt.y);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    function drawSampling(ctx, analogData, samples, sf) {
+      ctx.clearRect(0, 0, canvasWidth, samplingHeight);
+      drawGrid(ctx, canvasWidth, samplingHeight, sf, 4);
+      ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(margin.left, samplingHeight - margin.bottom); ctx.lineTo(canvasWidth - margin.right, samplingHeight - margin.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, samplingHeight - margin.bottom); ctx.stroke();
+      ctx.fillStyle = "#333"; ctx.font = "12px sans-serif";
+      ctx.fillText("電圧", margin.left - 30, margin.top + 5);
+      ctx.fillText("時間", canvasWidth - margin.right - 20, samplingHeight - margin.bottom + 20);
+      ctx.strokeStyle = "#0066cc"; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      analogData.forEach((pt, i) => {
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const yy = margin.top + (samplingHeight - margin.top - margin.bottom) * (1 - pt.y);
+        if (i === 0) ctx.moveTo(x, yy);
+        else ctx.lineTo(x, yy);
+      });
+      ctx.stroke(); ctx.globalAlpha = 1.0;
+      samples.forEach(pt => {
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const y = margin.top + (samplingHeight - margin.top - margin.bottom) * (1 - pt.y);
+        ctx.strokeStyle = "#999"; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
+        ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, samplingHeight - margin.bottom); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.fillStyle = "#fff"; ctx.strokeStyle = "#0066cc"; ctx.lineWidth = 2;
+        ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      });
+    }
+
+    function drawQuantization(ctx, analogData, samples, quantized, levels) {
+      ctx.clearRect(0, 0, canvasWidth, quantHeight);
+      drawGrid(ctx, canvasWidth, quantHeight, samples.length - 1, levels);
+      ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(margin.left, quantHeight - margin.bottom); ctx.lineTo(canvasWidth - margin.right, quantHeight - margin.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, quantHeight - margin.bottom); ctx.stroke();
+      ctx.fillStyle = "#333"; ctx.font = "12px sans-serif";
+      ctx.fillText("電圧", margin.left - 30, margin.top + 5);
+      ctx.fillText("時間", canvasWidth - margin.right - 20, quantHeight - margin.bottom + 20);
+      ctx.strokeStyle = "#0066cc"; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      analogData.forEach((pt, i) => {
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const y = margin.top + (quantHeight - margin.top - margin.bottom) * (1 - pt.y);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke(); ctx.globalAlpha = 1.0;
+      // 1つ目（index 0）のバーは表示しない
+      for (let i = 1; i < quantized.length; i++) {
+        const pt = quantized[i];
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const barWidth = (canvasWidth - margin.left - margin.right) / (quantized.length - 1) * 0.8;
+        const barX = x - barWidth / 2;
+        const barY = margin.top + (quantHeight - margin.top - margin.bottom) * (1 - pt.qy);
+        const barHeight = (quantHeight - margin.top - margin.bottom) * pt.qy;
+        ctx.fillStyle = "#f5a623"; ctx.beginPath(); ctx.rect(barX, barY, barWidth, barHeight); ctx.fill();
+        ctx.strokeStyle = "#cc8400"; ctx.lineWidth = 1; ctx.stroke();
+      }
+      samples.forEach((pt, i) => {
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const y = margin.top + (quantHeight - margin.top - margin.bottom) * (1 - pt.y);
+        ctx.beginPath(); ctx.fillStyle = "#fff"; ctx.strokeStyle = "#0066cc"; ctx.lineWidth = 2;
+        ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      });
+    }
+
+    function drawEncoding(ctx, quantized, levels, bd) {
+      ctx.clearRect(0, 0, canvasWidth, encodeHeight);
+      drawGrid(ctx, canvasWidth, encodeHeight, quantized.length - 1, levels);
+      ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(margin.left, encodeHeight - margin.bottom); ctx.lineTo(canvasWidth - margin.right, encodeHeight - margin.bottom); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, encodeHeight - margin.bottom); ctx.stroke();
+      ctx.fillStyle = "#333"; ctx.font = "12px sans-serif";
+      ctx.fillText("電圧", margin.left - 30, margin.top + 5);
+      ctx.fillText("時間", canvasWidth - margin.right - 20, encodeHeight - margin.bottom + 20);
+      // 1つ目（index 0）のバーは表示しない
+      for (let i = 1; i < quantized.length; i++) {
+        const pt = quantized[i];
+        const x = margin.left + (canvasWidth - margin.left - margin.right) * (pt.t / totalTime);
+        const barWidth = (canvasWidth - margin.left - margin.right) / (quantized.length - 1) * 0.8;
+        const barX = x - barWidth / 2;
+        const barY = margin.top + (encodeHeight - margin.top - margin.bottom) * (1 - pt.qy);
+        const barHeight = (encodeHeight - margin.top - margin.bottom) * pt.qy;
+        ctx.fillStyle = "#f5a623"; ctx.beginPath(); ctx.rect(barX, barY, barWidth, barHeight); ctx.fill();
+        ctx.strokeStyle = "#cc8400"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.beginPath(); ctx.fillStyle = "#fff"; ctx.strokeStyle = "#0066cc"; ctx.lineWidth = 1.5;
+        ctx.arc(x, barY - 8, 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = "#005c33"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText(pt.intVal, x, barY - 20);
+        ctx.fillText(pt.bin, x, encodeHeight - margin.bottom + 15);
+      }
+      for (let i = 0; i < levels; i++) {
+        const levelY = margin.top + (encodeHeight - margin.top - margin.bottom) * (1 - i / (levels - 1));
+        const bin = i.toString(2).padStart(bd, '0');
+        ctx.fillStyle = "#005c33"; ctx.font = "10px sans-serif"; ctx.textAlign = "right";
+        ctx.fillText(bin, margin.left - 10, levelY + 4);
+        ctx.strokeStyle = "#ddd"; ctx.lineWidth = 1; ctx.setLineDash([3, 2]);
+        ctx.beginPath(); ctx.moveTo(margin.left, levelY); ctx.lineTo(canvasWidth - margin.right, levelY); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+
+    function drawGrid(ctx, w, h, nx, ny) {
+      ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      for (let i = 0; i <= nx; i++) {
+        const x = margin.left + (w - margin.left - margin.right) * (i / nx);
+        ctx.beginPath(); ctx.moveTo(x, margin.top); ctx.lineTo(x, h - margin.bottom); ctx.stroke();
+      }
+      for (let j = 0; j < ny; j++) {
+        const y = margin.top + (h - margin.top - margin.bottom) * (1 - j / (ny - 1));
+        ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(w - margin.right, y); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+  </script>
+</body>
+</html>
